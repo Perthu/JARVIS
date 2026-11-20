@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Jarvis</title>
+<style>
+:root{--bg:#05101a;--panel:#0b1f2e;--line:#16435c;--cy:#52dcff;--am:#ffb23e;--tx:#d8f3ff;--mu:#7fa6ba;color-scheme:dark}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{background:var(--bg);color:var(--tx);font:16px/1.5 "Segoe UI",system-ui,sans-serif;display:flex;justify-content:center;
+padding:env(safe-area-inset-top,0) 0 env(safe-area-inset-bottom,0)}
+main{width:100%;max-width:560px;display:flex;flex-direction:column;height:100%;padding:12px 14px}
+#orbwrap{display:flex;flex-direction:column;align-items:center;padding:8px 0 4px}
+#orb{width:110px;height:110px;border-radius:50%;position:relative;cursor:pointer;border:0;background:radial-gradient(circle,#dffaff 0 9%,var(--cy) 10% 24%,transparent 25%);box-shadow:0 0 28px #52dcff55}
+#orb::before,#orb::after{content:"";position:absolute;border-radius:50%;inset:6px;border:2px dashed var(--cy);opacity:.7;animation:spin 14s linear infinite}
+#orb::after{inset:20px;border:2px solid var(--am);border-left-color:transparent;border-right-color:transparent;animation-duration:6s;animation-direction:reverse}
+#orb.listen{animation:pulse 1s ease-in-out infinite;box-shadow:0 0 44px #52dcffcc}
+#orb.speak{box-shadow:0 0 44px #ffb23ecc}
+@keyframes spin{to{transform:rotate(360deg)}}
+@keyframes pulse{50%{transform:scale(1.07)}}
+@media (prefers-reduced-motion:reduce){#orb::before,#orb::after,#orb.listen{animation:none}}
+#status{color:var(--mu);font-size:14px;margin-top:6px;min-height:21px;text-align:center}
+#log{flex:1;overflow-y:auto;display:flex;flex-direction:column;gap:8px;padding:8px 0}
+.m{max-width:88%;padding:9px 12px;border-radius:12px;background:var(--panel);border:1px solid var(--line);word-wrap:break-word}
+.m.me{align-self:flex-end;background:#0e3347}
+.m a{color:var(--am);font-weight:600}
+#bar{display:flex;gap:8px;padding-top:8px}
+#q{flex:1;min-width:0;background:var(--panel);color:var(--tx);border:1px solid var(--line);border-radius:10px;padding:12px;font:inherit}
+button.b{background:var(--cy);color:#04202c;border:0;border-radius:10px;padding:0 14px;font:inherit;font-weight:600;cursor:pointer}
+button.b.alt{background:var(--panel);color:var(--tx);border:1px solid var(--line)}
+button.b.on{background:var(--am)}
+:focus-visible{outline:2px solid var(--am);outline-offset:2px}
+#opts{display:flex;gap:8px;padding-top:8px;font-size:13px}
+#opts button{flex:1;padding:8px}
+#vsel{width:100%;margin-top:8px;background:var(--panel);color:var(--tx);border:1px solid var(--line);border-radius:10px;padding:8px;font:inherit;font-size:13px}
+</style>
+</head>
+<body>
+<main>
+ <div id="orbwrap">
+  <button id="orb" aria-label="Tap to speak"></button>
+  <div id="status">Ready. Tap the circle and speak.</div>
+ </div>
+ <div id="log" aria-live="polite"></div>
+ <div id="bar">
+  <input id="q" placeholder="Type or say a command" autocomplete="off">
+  <button class="b" id="go">Send</button>
+ </div>
+ <div id="opts">
+  <button class="b alt" id="wake">Always listen: off</button>
+  <button class="b alt" id="mute">Voice: on</button>
+  <button class="b alt" id="help">Help</button>
+ </div>
+ <select id="vsel" aria-label="Choose voice"></select>
+</main>
+<script>
+const $=id=>document.getElementById(id);
+const log=$("log"),orb=$("orb"),status=$("status"),q=$("q"),vsel=$("vsel");
+let voiceOn=true,alwaysOn=false,rec=null,listening=false,voices=[];
+const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
+
+function loadVoices(){
+ if(!window.speechSynthesis)return;
+ voices=speechSynthesis.getVoices().filter(v=>/^en/i.test(v.lang));
+ const rank=v=>{
+  let s=0;
+  if(/en[-_]GB/i.test(v.lang))s+=10;
+  if(/daniel|george|ryan|arthur|oliver|uk english male|male/i.test(v.name))s+=5;
+  if(/female|susan|hazel|libby|sonia|kate|serena/i.test(v.name))s-=6;
+  return s;
+ };
+ voices.sort((a,b)=>rank(b)-rank(a));
+ const keep=vsel.value;
+ vsel.innerHTML=voices.map((v,i)=>'<option value="'+i+'">'+v.name+" ("+v.lang+")</option>").join("")||'<option>No English voices found</option>';
+ if(keep)vsel.value=keep;
+}
+loadVoices();
+if(window.speechSynthesis)speechSynthesis.onvoiceschanged=loadVoices;
+
+function add(html,me){const d=document.createElement("div");d.className="m"+(me?" me":"");d.innerHTML=html;log.appendChild(d);log.scrollTop=log.scrollHeight}
+function esc(s){return s.replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]))}
+function say(text,html){
+ add(html||esc(text));
+ if(!voiceOn||!window.speechSynthesis)return;
+ const u=new SpeechSynthesisUtterance(text);
+ const v=voices[+vsel.value];
+ if(v){u.voice=v;u.lang=v.lang}else u.lang="en-GB";
+ u.pitch=0.85;u.rate=0.95;
+ u.onstart=()=>orb.classList.add("speak");u.onend=()=>orb.classList.remove("speak");
+ speechSynthesis.cancel();speechSynthesis.speak(u);
+}
+function openLink(url,label){
+ window.open(url,"_blank");
+ say(label,esc(label)+' – <a href="'+url+'" target="_blank" rel="noopener">open</a>');
+}
+const enc=encodeURIComponent;
+function notes(){try{return JSON.parse(localStorage.getItem("jarvis_notes")||"[]")}catch(e){return[]}}
+function saveNotes(n){try{localStorage.setItem("jarvis_notes",JSON.stringify(n))}catch(e){}}
+
+function handle(raw){
+ let t=raw.trim();if(!t)return;
+ add(esc(t),true);
+ t=t.replace(/^(hey |hi |okay |ok )?jarvis[,.!]?\s*/i,"");
+ const l=t.toLowerCase().replace(/[?.!]+$/,"");let m;
+ if(!l){say("Yes, Marco?");return}
+
+ if(/^(hello|hi|hey)$/.test(l))return say("Good day, Marco. How may I assist?");
+ if(/thank/.test(l))return say("Always a pleasure.");
+ if(/what('s| is) the time|what time is it|^time$/.test(l))
+  return say("The time is "+new Date().toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit"}));
+ if(/what('s| is) the date|what day is it|today's date|^date$/.test(l))
+  return say("Today is "+new Date().toLocaleDateString("en-GB",{weekday:"long",day:"numeric",month:"long",year:"numeric"}));
+
+ if(m=l.match(/timer.*?(\d+)\s*(second|minute|hour)/)){
+  const n=+m[1],ms=n*(m[2]==="second"?1000:m[2]==="minute"?60000:3600000),w=m[2]+(n>1?"s":"");
+  setTimeout(()=>say("Your "+n+" "+w+" timer has finished."),ms);
+  return say("Timer set for "+n+" "+w+". Please keep this page open.");
+ }
+
+ if(m=l.match(/^(remember|note|make a note|write down)( that| to)?\s+(.+)/)){const n=notes();n.push(m[3]);saveNotes(n);return say("Noted.")}
+ if(/^(show|read)( me)?( my)? notes/.test(l)){const n=notes();return n.length?say("You have "+n.length+" notes. "+n.join(". "),"<b>Notes</b><br>"+n.map(esc).join("<br>")):say("You have no notes yet.")}
+ if(/^(delete|clear)( all)?( my)? notes/.test(l)){saveNotes([]);return say("All notes deleted.")}
+
+ if(/^(what is |what's |calculate |compute )?[\d\s.,+\-*/x()]+(plus|minus|times|multiplied by|divided by|over|[+\-*/x])/.test(l)||/^(calculate|compute)/.test(l)){
+  let e=l.replace(/^(what is|what's|calculate|compute)\s*/,"").replace(/plus/g,"+").replace(/minus/g,"-").replace(/multiplied by|times|\bx\b/g,"*").replace(/divided by|\bover\b/g,"/").replace(/,/g,"");
+  if(/^[\d+\-*/().\s]+$/.test(e)){try{const r=Function('"use strict";return ('+e+')')();if(isFinite(r))return say("That comes to "+Math.round(r*1e6)/1e6)}catch(x){}}
+ }
+
+ if(m=l.match(/^(weather|forecast)( in| for)?\s*(.*)/))return openLink("https://www.google.com/search?q="+enc("weather "+(m[3]||"")),"Here is the weather"+(m[3]?" for "+m[3]:""));
+ if(m=l.match(/^(images|pictures|photos|show me images|show me pictures)( of)?\s+(.+)/))return openLink("https://www.google.com/search?tbm=isch&q="+enc(m[3]),"Images of "+m[3]);
+ if(m=l.match(/^(youtube|play|watch)\s+(.+)/))return openLink("https://www.youtube.com/results?search_query="+enc(m[2]),"Searching YouTube for "+m[2]);
+ if(m=l.match(/^(map|maps|directions to|navigate to|take me to|show me a map of)\s*(.*)/))return openLink("https://www.google.com/maps/search/"+enc(m[2]||t),"Opening the map");
+ if(m=l.match(/^translate\s+(.+?)(?:\s+(?:to|into)\s+(danish|english|german|french|spanish))?$/)){
+  const code={danish:"da",english:"en",german:"de",french:"fr",spanish:"es"}[m[2]||"danish"];
+  return openLink("https://translate.google.com/?sl=auto&tl="+code+"&text="+enc(m[1]),"Translating");
+ }
+ if(m=l.match(/^(wikipedia|wiki)\s+(.+)/))return openLink("https://en.wikipedia.org/w/index.php?search="+enc(m[2]),"Searching Wikipedia for "+m[2]);
+
+ m=l.match(/^(search( for)?|google|look up|find)\s+(.*)/);
+ const term=m?m[3]:t;
+ openLink("https://www.google.com/search?q="+enc(term),"Searching Google for "+term);
+}
+
+function setupRec(){
+ if(!SR){status.textContent="Speech recognition isn’t supported in this browser. Use the text box.";return null}
+ const r=new SR();r.lang="en-GB";r.interimResults=false;r.continuous=false;
+ r.onstart=()=>{listening=true;orb.classList.add("listen");status.textContent="Listening…"};
+ r.onend=()=>{listening=false;orb.classList.remove("listen");status.textContent=alwaysOn?"Always listening. Say “Jarvis …”":"Ready. Tap the circle and speak.";
+  if(alwaysOn)setTimeout(()=>{try{r.start()}catch(e){}},300)};
+ r.onerror=e=>{if(e.error==="not-allowed"){alwaysOn=false;$("wake").textContent="Always listen: off";status.textContent="Microphone blocked. Allow access in your browser."}};
+ r.onresult=e=>{
+  const txt=e.results[e.results.length-1][0].transcript;
+  if(alwaysOn&&!/jarvis|service/i.test(txt))return;
+  handle(txt);
+ };
+ return r;
+}
+function toggleMic(){
+ if(!rec)rec=setupRec();if(!rec)return;
+ if(listening){alwaysOn=false;rec.stop();return}
+ try{speechSynthesis.cancel();rec.start()}catch(e){}
+}
+orb.onclick=toggleMic;
+$("go").onclick=()=>{handle(q.value);q.value=""};
+q.addEventListener("keydown",e=>{if(e.key==="Enter"){handle(q.value);q.value=""}});
+$("wake").onclick=function(){
+ alwaysOn=!alwaysOn;this.textContent="Always listen: "+(alwaysOn?"on":"off");this.classList.toggle("on",alwaysOn);
+ if(!rec)rec=setupRec();if(!rec)return;
+ if(alwaysOn&&!listening){try{rec.start()}catch(e){}}else if(!alwaysOn&&listening){rec.stop()}
+};
+$("mute").onclick=function(){voiceOn=!voiceOn;this.textContent="Voice: "+(voiceOn?"on":"off");if(!voiceOn)speechSynthesis.cancel()};
+vsel.onchange=()=>say("Voice changed. How does this sound?");
+$("help").onclick=()=>add("<b>Try saying:</b><br>• search for best grease for chain drives<br>• images of cable drum<br>• youtube wire rope splicing<br>• weather in Aarhus<br>• directions to Randers<br>• translate where is the toilet to Danish<br>• timer 10 minutes<br>• remember to order spare parts<br>• show notes<br>• what is 125 times 4<br>• what time is it");
+add("Good day, Marco. How may I assist you? Tap the circle to speak, or type below. If the voice sounds off, pick another from the list at the bottom.");
+</script>
+</body>
+</html>
